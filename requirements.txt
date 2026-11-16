@@ -1,0 +1,5 @@
+# runtime deps
+youtube-transcript-api>=1.2
+opencc-python-reimplemented>=0.1.7
+
+# external binary (install separately): yt-dlp

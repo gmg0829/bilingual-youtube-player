@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>双语 YouTube 播放器</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="mark">▶</span>
+    <span class="brand-t">双语播放器</span>
+    <span class="brand-s">BILINGUAL&nbsp;YOUTUBE&nbsp;PLAYER</span>
+  </div>
+  <div class="top-r">
+    <label class="sel"><span>源语言</span>
+      <select id="srcLang"><option value="auto">自动</option></select>
+    </label>
+    <label class="sel"><span>译入</span>
+      <select id="tgtLang"></select>
+    </label>
+    <label class="sel"><span>译文来源</span>
+      <select id="prefer">
+        <option value="auto" selected>自动</option>
+        <option value="mt">无密钥机翻</option>
+        <option value="yt">YouTube 机翻</option>
+        <option value="llm">AI 翻译</option>
+      </select>
+    </label>
+  </div>
+</header>
+
+<section class="wrap">
+  <form class="search" id="form">
+    <input id="url" type="url" inputmode="url" spellcheck="false" autocomplete="off"
+           placeholder="粘贴 YouTube 链接 —— https://www.youtube.com/watch?v=…">
+    <button type="submit" id="load">载入</button>
+  </form>
+  <p class="hint" id="hint">输入链接后视频会自动播放，字幕按「原文 / 译文」两行叠在画面下方。</p>
+</section>
+
+<section class="wrap stage-wrap" id="stageWrap" hidden>
+  <div class="player" id="player">
+    <div class="stage" id="stage">
+      <video id="vid" playsinline preload="metadata"></video>
+      <div class="cover" id="cover">
+        <div class="bigplay" id="bigplay" role="button" tabindex="0" aria-label="播放">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+      </div>
+      <div class="subs" id="subs" hidden>
+        <div class="subline orig" id="subOrig"></div>
+        <div class="subline trans" id="subTrans"></div>
+      </div>
+      <div class="tapnote" id="tapnote" hidden>浏览器拦截了自动播放 —— 点一下画面即可开始</div>
+      <a class="safari" id="safari" hidden target="_blank" rel="noopener">在内置浏览器里播不动？在 Safari 中打开 ↗</a>
+      <div class="tapnote" id="bufnote" hidden>缓冲中…</div>
+    </div>
+    <div class="bar">
+      <button id="pp" class="btn" aria-label="播放/暂停">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" id="ppIcon"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+      <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="进度">
+      <span class="tm" id="tm">0:00 / –:––</span>
+      <select id="rate" class="mini" aria-label="速度">
+        <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
+        <option value="1" selected>1×</option><option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option><option value="2">2×</option>
+      </select>
+      <button id="mute" class="btn" aria-label="静音">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg>
+      </button>
+      <input type="range" id="vol" class="vol" min="0" max="1" step="0.05" value="1" aria-label="音量">
+      <select id="ccmode" class="mini" aria-label="字幕">
+        <option value="bi" selected>双语</option>
+        <option value="orig">仅原文</option>
+        <option value="trans">仅译文</option>
+        <option value="off">关闭</option>
+      </select>
+      <button id="useYT" class="btn txt" aria-label="改用 YouTube 播放器">YT</button>
+      <button id="fs" class="btn" aria-label="全屏">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 9V4h5v2H6v3H4zm11-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 0h2v5h-5v-2h3v-3z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="meta">
+    <h1 id="vtitle">—</h1>
+    <p class="vby" id="vby"></p>
+    <p class="notes" id="notes"></p>
+    <p class="notes" id="streamNote"></p>
+  </div>
+
+  <section class="tr" id="trPanel">
+    <div class="tr-head">
+      <h2>字幕文本</h2>
+      <div class="tr-tools">
+        <span class="badge" id="trInfo">—</span>
+        <button class="btn ghost" id="trToggle">收起</button>
+      </div>
+    </div>
+    <div class="trlist" id="trlist"></div>
+  </section>
+</section>
+
+<section class="wrap about">
+  <h2>它是怎么工作的</h2>
+  <ol>
+    <li>服务端只请求一次 YouTube 视频页，取出该视频的字幕轨道（人工字幕 + 自动字幕）。</li>
+    <li>译文优先取视频自带的同语言轨道；没有就用 YouTube 自己的机器翻译（<code>&amp;tlang=</code>）。</li>
+    <li>缺简体时用繁体机翻再转简体（OpenCC）；也可以配置 <code>YTB_LLM_BASE / YTB_LLM_KEY / YTB_LLM_MODEL</code> 走 AI 翻译。</li>
+    <li>所有字幕都带时间码，和播放进度逐句对齐，点击任意一句即可跳转。</li>
+  </ol>
+  <p class="foot">快捷键：空格 播放/暂停 · ←/→ 快退快进 5 秒 · ↑/↓ 音量 · C 字幕 · F 全屏</p>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

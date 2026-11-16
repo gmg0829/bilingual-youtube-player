@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>embed test</title>
+<style>body{font:14px monospace;background:#111;color:#0f0}#log{padding:8px;white-space:pre-wrap}</style>
+</head><body>
+<div id="log">booting…</div>
+<div id="host" style="width:640px;height:360px;background:#000"></div>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+const log = (m) => { document.getElementById('log').textContent += "\n" + m; };
+function start() {
+  const p = new YT.Player('host', {
+    videoId: new URLSearchParams(location.search).get('v') || 'iG9CE55wbtY',
+    playerVars: { controls: 0, disablekb: 1, rel: 0, fs: 0, playsinline: 1, cc_load_policy: 0, enablejsapi: 1, autoplay: 1, origin: location.origin },
+    events: {
+      onReady: () => { log('ready'); p.playVideo(); setTimeout(() => log('state after 2s: ' + p.getPlayerState() + ' t=' + p.getCurrentTime()), 2000); },
+      onStateChange: (e) => log('statechange ' + e.data),
+      onError: (e) => log('error ' + e.data),
+    },
+  });
+  window.p = p;
+  setInterval(() => log('tick state=' + (p.getPlayerState ? p.getPlayerState() : '?') + ' t=' + (p.getCurrentTime ? p.getCurrentTime() : '?')), 2000);
+}
+function waitYT(tries) {
+  if (window.YT && YT.Player) return start();
+  if (tries > 100) return log('YT API never loaded');
+  setTimeout(() => waitYT(tries + 1), 100);
+}
+waitYT(0);
+document.addEventListener('click', () => { try { window.p && window.p.playVideo(); log('click -> playVideo'); } catch (e) { log('click err ' + e); } });
+</script>
+</body></html>
