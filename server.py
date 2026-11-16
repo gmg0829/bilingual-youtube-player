@@ -235,6 +235,7 @@ def export_bilingual(video_id: str, tgt: str = "zh-Hans") -> Path:
     if not out.exists() or out.stat().st_mtime < max(media.stat().st_mtime, srt.stat().st_mtime):
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(media), "-i", str(srt),
                "-map", "0:v", "-map", "0:a?", "-map", "1:0", "-c", "copy", "-c:s", "mov_text",
+               "-threads", "1", "-filter_threads", "1",
                "-metadata:s:s:0", "language=zho", "-metadata:s:s:0", "title=EN+ZH",
                "-disposition:s:0", "default", str(out)]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
