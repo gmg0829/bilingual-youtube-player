@@ -78,6 +78,13 @@ def prepare_and_play(video_id: str, tgt: str = "zh-Hans"):
         out = export_bilingual(video_id, tgt)
         _stage(video_id, "mux", 1.0, out.name)
 
+        public_url = ""
+        if os.environ.get("R2_BUCKET"):
+            _stage(video_id, "mux", 1.0, "上传到云端")
+            try:
+                public_url = upload_to_r2(out, _r2_key(video_id))
+            except Exception as e:
+                _stage(video_id, "mux", 1.0, "上传失败：" + str(e)[:60])
         _stage(video_id, "play", 0.5, "打开播放器")
         played = False
         try:
@@ -88,7 +95,7 @@ def prepare_and_play(video_id: str, tgt: str = "zh-Hans"):
             played = False
         _stage(video_id, "play", 1.0, "已播放" if played else "已生成")
         _job_set(video_id, state="done", error="", file=str(out), name=out.name,
-                 size=out.stat().st_size, played=played)
+                 size=out.stat().st_size, played=played, publicUrl=public_url)
     except Exception as e:
         _job_set(video_id, state="error", error=str(e)[:200])
 
@@ -205,7 +212,64 @@ def job_state(video_id: str) -> dict:
         return {"state": j.get("state", "idle"), "error": j.get("error", ""),
                 "stages": {k: dict(v) for k, v in (j.get("stages") or {}).items()},
                 "file": j.get("file"), "name": j.get("name"),
-                "played": j.get("played", False), "order": STAGE_ORDER}
+                "played": j.get("played", False), "order": STAGE_ORDER,
+                "publicUrl": j.get("publicUrl", "")}
+
+
+def _r2_key(video_id: str) -> str:
+    return f"{video_id}-双语.mp4"
+
+
+def r2_presign_put(key: str, expires: int = 3600) -> tuple:
+    """AWS SigV4 presigned PUT url for R2. Returns (url, headers)."""
+    import datetime
+    import hashlib
+    import hmac
+
+    account = os.environ.get("R2_ACCOUNT_ID")
+    key_id = os.environ.get("R2_ACCESS_KEY_ID")
+    secret = os.environ.get("R2_SECRET_ACCESS_KEY")
+    bucket = os.environ.get("R2_BUCKET")
+    if not all((account, key_id, secret, bucket)):
+        raise RuntimeError("R2 没有配置（需要 R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET）")
+    region = "auto"
+    service = "s3"
+    host = f"{account}.r2.cloudflarestorage.com"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    datestamp = now.strftime("%Y%m%d")
+    scope = f"{datestamp}/{region}/{service}/aws4_request"
+    canonical_uri = f"/{bucket}/" + urllib.parse.quote(key)
+    query = ("X-Amz-Algorithm=AWS4-HMAC-SHA256"
+             f"&X-Amz-Credential={urllib.parse.quote(key_id + '/' + scope, safe='')}"
+             f"&X-Amz-Date={amz_date}&X-Amz-Expires={expires}&X-Amz-SignedHeaders=host")
+    canonical_headers = f"host:{host}\n"
+    signed_headers = "host"
+    payload_hash = "UNSIGNED-PAYLOAD"
+    canonical_request = "\n".join(["PUT", canonical_uri, query, canonical_headers, signed_headers, payload_hash])
+    cr_hash = hashlib.sha256(canonical_request.encode()).hexdigest()
+    string_to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, cr_hash])
+
+    def sign(key, msg):
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+    k = sign(("AWS4" + secret).encode("utf-8"), datestamp)
+    k = sign(k, region); k = sign(k, service); k = sign(k, "aws4_request")
+    signature = hmac.new(k, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+    url = f"https://{host}/{bucket}/" + urllib.parse.quote(key) + "?" + query + f"&X-Amz-Signature={signature}"
+    return url, {"Host": host}
+
+
+def upload_to_r2(path, key: str) -> str:
+    """PUT the file straight into R2 with a presigned url (Worker-free)."""
+    url, headers = r2_presign_put(key)
+    bucket = os.environ.get("R2_BUCKET")
+    public = os.environ.get("R2_PUBLIC_BASE") or f"https://{bucket}.r2.dev"
+    data = Path(path).read_bytes()
+    req = urllib.request.Request(url, data=data, method="PUT", headers=headers)
+    with urllib.request.urlopen(req, timeout=600) as r:
+        r.read()
+    return f"{public.rstrip('/')}/{urllib.parse.quote(key)}"
 
 
 def export_bilingual(video_id: str, tgt: str = "zh-Hans") -> Path:
@@ -298,6 +362,9 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------ helpers
     def _send(self, code: int, body: bytes, ctype: str, extra: dict | None = None):
         self.send_response(code)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -314,6 +381,35 @@ class Handler(BaseHTTPRequestHandler):
                    "application/json; charset=utf-8")
 
     # ------------------------------------------------------------ routing
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        try:
+            if u.path == "/api/queue":
+                vid = (q.get("video") or [""])[0]
+                tgt = (q.get("tgt") or ["zh-Hans"])[0]
+                if not ytcap.parse_video_id(vid):
+                    return self._json({"error": "bad id"}, 400)
+                with JOBS_LOCK:
+                    running = (JOBS.get(vid) or {}).get("state") == "running"
+                    if not running:
+                        JOBS[vid] = {"stages": {}, "state": "running", "error": ""}
+                if not running:
+                    threading.Thread(target=prepare_and_play, args=(vid, tgt), daemon=True).start()
+                return self._json(job_state(vid))
+            return self._send(404, b"not found", "text/plain; charset=utf-8")
+        except Exception as e:
+            traceback.print_exc()
+            return self._json({"error": str(e)}, 500)
+
     def do_GET(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
