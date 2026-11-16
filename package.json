@@ -1,0 +1,11 @@
+{
+  "name": "bilingual-youtube-player",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Paste a YouTube link, get a bilingual player (original + translated subtitles)",
+  "scripts": {
+    "dev": "wrangler pages dev public",
+    "deploy": "wrangler pages deploy public"
+  }
+}

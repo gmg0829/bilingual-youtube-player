@@ -337,10 +337,17 @@ async function loadVideo(rawUrl) {
 
 /* resolve the media (download once, then it is served from disk), then mount the player */
 async function resolveStream(videoId) {
+  // Cloudflare 没有本地视频代理：直接走 YouTube 官方播放器（真实浏览器里能播）
+  if (new URLSearchParams(location.search).get("cloud") === "1" || !location.hostname.match(/^(127\.|localhost|10\.|192\.168\.)/)) {
+    mountYT(videoId);
+    return true;
+  }
   for (let i = 0; i < 200; i++) {
     let st;
     try {
-      st = await (await fetch("/api/stream-info?video=" + encodeURIComponent(videoId))).json();
+      const r = await fetch("/api/stream-info?video=" + encodeURIComponent(videoId));
+      if (r.status === 404) { mountYT(videoId); return true; }
+      st = await r.json();
     } catch (e) {
       st = { state: "error", error: String(e.message) };
     }
@@ -644,6 +651,12 @@ async function runPrepare() {
     el.exportNote.className = "action-note err";
     el.exportNote.textContent = "失败：" + String(e.message || e).slice(0, 90);
   }
+}
+
+const isLocal = location.hostname.match(/^(127\.|localhost|10\.|192\.168\.)/);
+if (!isLocal) {
+  if (el.exportBtn) el.exportBtn.hidden = true;
+  if (el.exportNote) el.exportNote.textContent = "云端版只提供网页播放；「带字幕 mp4」在本机生成";
 }
 
 el.exportBtn.addEventListener("click", runPrepare);

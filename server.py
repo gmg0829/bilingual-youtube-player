@@ -322,6 +322,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._static("index.html")
             if u.path.startswith("/static/"):
                 return self._static(u.path[len("/static/"):])
+            if u.path in ("/style.css", "/app.js"):
+                return self._static(u.path[1:])
             if u.path == "/api/health":
                 return self._json({"ok": True, "llm": bool(os.environ.get("YTB_LLM_KEY"))})
             if u.path == "/api/load":

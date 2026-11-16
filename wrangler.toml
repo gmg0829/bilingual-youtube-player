@@ -1,0 +1,7 @@
+# Cloudflare Pages — build settings
+name = "bilingual-youtube-player"
+compatibility_date = "2024-11-01"
+pages_build_output_dir = "public"
+
+# Pages Functions live in functions/ and are routed by their path:
+#   functions/api/load.js  ->  /api/load

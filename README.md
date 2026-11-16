@@ -88,3 +88,45 @@ yt-bilingual/
   「点一下画面即可开始」；这是系统策略，任何网页都绕不过去，点一下之后就一直能播了。
 * 字幕两条轨道如果断句粒度差很多（比如某些人工中文字幕是每 4 秒一块），同一时刻两行说的不是同一句话是正常的
   —— 各自显示「此刻正在讲的那一行」。字幕稿里每块译文只出现一次。
+
+---
+
+## Cloudflare Pages 部署（云端版）
+
+云端版只做「网页播放器」：画面用 YouTube 官方播放器（iframe），我们的双语字幕层叠在上面，
+用 `getCurrentTime()` 对时；字幕与译文由一个无状态的 Worker 现取现译。
+
+```
+functions/api/load.js   Worker：ytcap.py 的 JS 版（innertube 取字幕 + gtx 机翻 + 缓存）
+public/                 静态页（index.html / style.css / app.js）
+build.sh                把 static/ 复制到 public/
+wrangler.toml           Pages 配置（输出目录 public，functions/ 自动路由 /api/load）
+```
+
+部署步骤（Cloudflare 控制台，3 步）：
+
+1. **Create a project** → *Pages* → *Connect to Git* → 选 `gmg0829/bilingual-youtube-player`
+2. Framework preset 选 **None**，Build command 填 `sh build.sh`，Output directory 填 `public`
+3. Deploy。函数在 `functions/api/load.js`，自动映射到 `/api/load`
+
+或者用 CLI：
+
+```bash
+npm i -g wrangler
+wrangler pages deploy public --project-name bilingual-youtube-player
+```
+
+### 云端版与本地版的分工
+
+| | 本地版 | Cloudflare 版 |
+|---|---|---|
+| 网页播放器 | ✅ | ✅ |
+| 视频画面 | 本地代理（`<video>`） | YouTube iframe |
+| 「带字幕 mp4」导出 | ✅（ffmpeg + 系统播放器） | ❌（无持久磁盘、无 ffmpeg） |
+| 成品分享 | 本机文件 | 需要 R2（下一步） |
+
+### 已知风险
+
+- **YouTube 对云 IP 的封锁**：数据中心段经常被 innertube 拒绝。Worker 里已加 10 分钟缓存，
+  被拒时只能等 IP 解封或换字幕源。
+- Worker 免费额度对个人自用足够；首次请求有冷启动。
