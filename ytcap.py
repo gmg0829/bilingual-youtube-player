@@ -674,7 +674,7 @@ def yt_mt_segments(video_id: str, target: str) -> list:
     return lines
 
 
-def gtx_translate(video_id: str, segments: list, target: str) -> list:
+def gtx_translate(video_id: str, segments: list, target: str, on_progress=None) -> list:
     """Machine translation that always works (no key), used when YouTube's own MT fails.
 
     Batches are sent in parallel; the endpoint keeps newline-separated input line-aligned,
@@ -709,9 +709,19 @@ def gtx_translate(video_id: str, segments: list, target: str) -> list:
                 for x, t in zip(chunk, parts)]
 
     chunks = [segments[i:i + batch] for i in range(0, len(segments), batch)]
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results = [None] * len(chunks)
+    done = 0
     with ThreadPoolExecutor(max_workers=4) as ex:
-        results = list(ex.map(work, chunks))
+        futs = {ex.submit(work, c): i for i, c in enumerate(chunks)}
+        for f in as_completed(futs):
+            results[futs[f]] = f.result()
+            done += 1
+            if on_progress:
+                try:
+                    on_progress(done / max(1, len(chunks)))
+                except Exception:
+                    pass
     if any(r is None for r in results):
         return []
     out = [item for r in results for item in r]
@@ -758,11 +768,20 @@ def _choose_source(tracks: list, src: str) -> list:
     return cands + manual + auto_en + auto
 
 
-def load(video_id: str, src: str = "auto", tgt: str = "zh-Hans", prefer: str = "auto") -> dict:
+def load(video_id: str, src: str = "auto", tgt: str = "zh-Hans", prefer: str = "auto",
+         on_progress=None) -> dict:
+    def emit(stage, frac, detail=""):
+        if on_progress:
+            try:
+                on_progress(stage, max(0.0, min(1.0, frac)), detail)
+            except Exception:
+                pass
     """Everything the player needs for one video: meta, tracks, source text, translation."""
+    emit("captions", 0.02, "读取字幕轨道")
     tracks = list_tracks(video_id)
     meta = video_meta(video_id)
     notices = []
+    emit("captions", 0.3, f"找到 {len(tracks)} 条轨道")
 
     # ---- pick the source track (first candidate that actually has text)
     source_segs, source_lang, picked = [], "", None
@@ -773,6 +792,8 @@ def load(video_id: str, src: str = "auto", tgt: str = "zh-Hans", prefer: str = "
             break
     if picked is None:
         notices.append("没有取到字幕轨道（该视频可能没有字幕，或 YouTube 暂时限制了请求）。")
+    else:
+        emit("captions", 1.0, f"{source_lang} · {len(source_segs)} 句")
 
     # ---- translation
     target_segs, method = [], "none"
@@ -818,10 +839,14 @@ def load(video_id: str, src: str = "auto", tgt: str = "zh-Hans", prefer: str = "
                     target_segs = llm_translate(source_segs, tgt) or []
                     method = "llm" if target_segs else "none"
                 elif prov == "ytmt":
+                    emit("translate", 0.05, "YouTube 机翻")
                     target_segs = yt_mt_segments(video_id, tgt)
                     method = "yt-mt" if target_segs else "none"
                 elif prov == "gtx":
-                    target_segs = gtx_translate(video_id, source_segs, tgt)
+                    emit("translate", 0.05, "机器翻译")
+                    target_segs = gtx_translate(
+                        video_id, source_segs, tgt,
+                        on_progress=lambda f: emit("translate", f, "机器翻译"))
                     method = "mt" if target_segs else "none"
 
             # 3) YouTube innertube translation (last resort, often empty)
@@ -841,6 +866,8 @@ def load(video_id: str, src: str = "auto", tgt: str = "zh-Hans", prefer: str = "
             if not target_segs:
                 notices.append(f"没能得到 {tgt} 的译文，可以稍后重试或换一种语言。")
     target_segs = _align(source_segs, target_segs) if method in ("llm",) else target_segs
+    if source_segs:
+        emit("translate", 1.0, f"{len(target_segs)} 句")
 
     return {
         "videoId": video_id,

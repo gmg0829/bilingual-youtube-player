@@ -111,6 +111,13 @@
         <button id="exportBtn" class="primary">带字幕播放</button>
         <span class="action-note" id="exportNote">把双语字幕封进视频，用系统播放器打开</span>
       </div>
+      <ol class="steps" id="steps" hidden>
+        <li data-stage="captions"><span class="bar"><i></i></span><span class="nm">读取字幕</span><span class="st"></span></li>
+        <li data-stage="translate"><span class="bar"><i></i></span><span class="nm">翻译</span><span class="st"></span></li>
+        <li data-stage="download"><span class="bar"><i></i></span><span class="nm">下载视频</span><span class="st"></span></li>
+        <li data-stage="mux"><span class="bar"><i></i></span><span class="nm">封入字幕轨</span><span class="st"></span></li>
+        <li data-stage="play"><span class="bar"><i></i></span><span class="nm">打开播放器</span><span class="st"></span></li>
+      </ol>
       <p class="notes" id="notes"></p>
       <p class="notes" id="streamNote"></p>
     </section>

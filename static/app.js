@@ -19,7 +19,7 @@ const el = {
   rate: $("#rate"), mute: $("#mute"), vol: $("#vol"), ccmode: $("#ccmode"), fs: $("#fs"),
   vtitle: $("#vtitle"), vby: $("#vby"), notes: $("#notes"), streamNote: $("#streamNote"),
   intro: $("#intro"), meta: $("#meta"),
-  exportBtn: $("#exportBtn"), exportNote: $("#exportNote"),
+  exportBtn: $("#exportBtn"), exportNote: $("#exportNote"), steps: $("#steps"),
   trlist: $("#trlist"), trInfo: $("#trInfo"), trToggle: $("#trToggle"),
   useYT: $("#useYT"),
 };
@@ -575,34 +575,78 @@ el.trlist.addEventListener("click", (e) => {
     if (s) player.seek(s.start);
   }
 });
-el.exportBtn.addEventListener("click", async () => {
+function paintSteps(state) {
+  const st = state.stages || {};
+  const order = state.order || ["captions", "translate", "download", "mux", "play"];
+  el.steps.hidden = false;
+  el.steps.querySelectorAll("li").forEach((li) => {
+    const key = li.dataset.stage;
+    const d = st[key];
+    const i = li.querySelector(".bar i");
+    const stl = li.querySelector(".st");
+    li.classList.remove("active", "done", "fail");
+    if (!d) { i.style.width = "0%"; stl.textContent = ""; return; }
+    i.style.width = (d.pct || 0) + "%";
+    if (d.done) {
+      li.classList.add("done");
+      stl.textContent = "完成";
+    } else {
+      li.classList.add("active");
+      stl.textContent = (d.pct || 0) + "%" + (d.detail ? " · " + d.detail : "");
+    }
+  });
+  if (state.state === "error") {
+    const order2 = order;
+    const active = el.steps.querySelector("li.active");
+    if (active) { active.classList.remove("active"); active.classList.add("fail"); }
+    else if (order2.length) {
+      const last = el.steps.querySelector('li[data-stage="' + order2[order2.length - 1] + '"]');
+      if (last) last.classList.add("fail");
+    }
+  }
+}
+
+async function runPrepare() {
   const vid = videoIdOf(el.url.value);
   if (!vid) { el.exportNote.textContent = "先载入一个视频"; return; }
   el.exportBtn.disabled = true;
   el.exportNote.className = "action-note";
+  el.exportNote.textContent = "开始准备…";
+  el.steps.hidden = false;
   const tgt = el.tgtLang.value || "zh-Hans";
-  const tick = ["正在准备视频", "正在写入字幕轨", "正在打开播放器"];
-  let i = 0;
-  const timer = setInterval(() => {
-    el.exportNote.textContent = tick[Math.min(i++, tick.length - 1)] + "…";
-  }, 1500);
   try {
-    const r = await fetch(`/api/export?video=${encodeURIComponent(vid)}&tgt=${encodeURIComponent(tgt)}`);
-    const d = await r.json();
-    if (d.error) throw new Error(d.error);
-    clearInterval(timer);
-    el.exportNote.className = "action-note ok";
-    el.exportNote.textContent = d.played
-      ? "已在系统播放器打开，字幕在播放器里可开关"
-      : "已生成，可在播放器里打开：" + d.name;
+    const r = await fetch(`/api/prepare?video=${encodeURIComponent(vid)}&tgt=${encodeURIComponent(tgt)}`);
+    let st = await r.json();
+    if (st.error && st.state !== "running") throw new Error(st.error);
+    paintSteps(st);
+    const timer = setInterval(async () => {
+      let s2;
+      try {
+        s2 = await (await fetch(`/api/prepare-status?video=${encodeURIComponent(vid)}`)).json();
+      } catch (e) { return; }
+      paintSteps(s2);
+      if (s2.state === "done") {
+        clearInterval(timer);
+        el.exportBtn.disabled = false;
+        el.exportNote.className = "action-note ok";
+        el.exportNote.textContent = s2.played
+          ? "已在系统播放器打开，字幕在播放器里可开关"
+          : "已生成：" + (s2.name || "");
+      } else if (s2.state === "error") {
+        clearInterval(timer);
+        el.exportBtn.disabled = false;
+        el.exportNote.className = "action-note err";
+        el.exportNote.textContent = "失败：" + (s2.error || "未知原因");
+      }
+    }, 600);
   } catch (e) {
-    clearInterval(timer);
-    el.exportNote.className = "action-note err";
-    el.exportNote.textContent = "失败：" + String(e.message || e).slice(0, 80);
-  } finally {
     el.exportBtn.disabled = false;
+    el.exportNote.className = "action-note err";
+    el.exportNote.textContent = "失败：" + String(e.message || e).slice(0, 90);
   }
-});
+}
+
+el.exportBtn.addEventListener("click", runPrepare);
 
 el.useYT.addEventListener("click", () => {
   const vid = videoIdOf(el.url.value);

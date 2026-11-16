@@ -37,12 +37,103 @@ STATIC = ROOT / "static"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
+# video_id -> job state for the "prepare and play" pipeline
+JOBS: dict = {}
+JOBS_LOCK = threading.Lock()
+
+STAGE_ORDER = ["captions", "translate", "download", "mux", "play"]
+
+
+def _job_set(video_id: str, **kw):
+    with JOBS_LOCK:
+        j = JOBS.setdefault(video_id, {"stages": {}, "state": "running", "error": ""})
+        j.update(kw)
+
+
+def _stage(video_id: str, stage: str, frac: float, detail: str = ""):
+    with JOBS_LOCK:
+        j = JOBS.setdefault(video_id, {"stages": {}, "state": "running", "error": ""})
+        prev = j["stages"].get(stage) or {}
+        j["stages"][stage] = {"pct": round(frac * 100), "detail": detail,
+                              "done": frac >= 1.0 or prev.get("done", False)}
+
+
+def prepare_and_play(video_id: str, tgt: str = "zh-Hans"):
+    """captions → translation → download → mux → hand to the native player."""
+    try:
+        _job_set(video_id, state="running", error="")
+        data = ytcap.load(video_id, tgt=tgt, on_progress=lambda st, f, d: _stage(video_id, st, f, d))
+        src_n = len(data["source"]["segments"])
+        if not src_n:
+            raise RuntimeError("这个视频没有字幕，做不到双语版")
+        _stage(video_id, "captions", 1.0, f"{data['source']['lang']} · {src_n} 句")
+        _stage(video_id, "translate", 1.0, f"{len(data['target']['segments'])} 句")
+
+        _stage(video_id, "download", 0.0, "准备下载")
+        path = download_with_progress(video_id, lambda f: _stage(video_id, "download", f, "下载视频"))
+        if not path:
+            raise RuntimeError("下载失败（YouTube 可能在限流），过一会儿再点一次")
+
+        _stage(video_id, "mux", 0.2, "写入字幕轨")
+        out = export_bilingual(video_id, tgt)
+        _stage(video_id, "mux", 1.0, out.name)
+
+        _stage(video_id, "play", 0.5, "打开播放器")
+        played = False
+        try:
+            r = subprocess.run(["apple-player", "play", str(out)],
+                               capture_output=True, text=True, timeout=45)
+            played = "playing" in (r.stdout or "")
+        except Exception:
+            played = False
+        _stage(video_id, "play", 1.0, "已播放" if played else "已生成")
+        _job_set(video_id, state="done", error="", file=str(out), name=out.name,
+                 size=out.stat().st_size, played=played)
+    except Exception as e:
+        _job_set(video_id, state="error", error=str(e)[:200])
+
+
 # video_id -> {"state": "pending"|"ready"|"error", "url":…, "path":…, "progress":…}
 STREAMS: dict = {}
 STREAMS_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------- media
+
+def download_with_progress(video_id: str, on_progress) -> str:
+    """Same as ytcap.download_media but reports yt-dlp's own percentage."""
+    import subprocess
+    outdir = ytcap.CACHE / "media"
+    outdir.mkdir(exist_ok=True)
+    dest = outdir / f"{video_id}.mp4"
+    if dest.exists() and dest.stat().st_size > 1000:
+        on_progress(1.0)
+        return str(dest)
+    for client in ("android", "default"):
+        cmd = ["yt-dlp", "--no-warnings", "--no-playlist", "--newline",
+               "--extractor-args", f"youtube:player_client={client}",
+               "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+               "--merge-output-format", "mp4",
+               "-o", str(outdir / "%(id)s.%(ext)s"),
+               f"https://www.youtube.com/watch?v={video_id}"]
+        try:
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, bufsize=1)
+        except Exception:
+            continue
+        for line in p.stdout:
+            m = re.search(r"\[download\]\s+([\d.]+)%", line)
+            if m:
+                try:
+                    on_progress(float(m.group(1)) / 100.0)
+                except Exception:
+                    pass
+        p.wait()
+        if dest.exists() and dest.stat().st_size > 1000:
+            on_progress(1.0)
+            return str(dest)
+    return ""
+
 
 def _media_worker(video_id: str):
     """Download the video once; afterwards playback is served from disk."""
@@ -106,6 +197,15 @@ def serve_local(video_id: str, range_header: str | None):
         f.seek(start)
         data = f.read(length)
     return start, end, size, data
+
+
+def job_state(video_id: str) -> dict:
+    with JOBS_LOCK:
+        j = JOBS.get(video_id) or {"stages": {}, "state": "idle", "error": ""}
+        return {"state": j.get("state", "idle"), "error": j.get("error", ""),
+                "stages": {k: dict(v) for k, v in (j.get("stages") or {}).items()},
+                "file": j.get("file"), "name": j.get("name"),
+                "played": j.get("played", False), "order": STAGE_ORDER}
 
 
 def export_bilingual(video_id: str, tgt: str = "zh-Hans") -> Path:
@@ -248,6 +348,23 @@ class Handler(BaseHTTPRequestHandler):
                 if st.get("error"):
                     out["error"] = st["error"]
                 return self._json(out)
+            if u.path == "/api/prepare":
+                vid = (q.get("video") or [""])[0]
+                tgt = (q.get("tgt") or ["zh-Hans"])[0]
+                if not ytcap.parse_video_id(vid):
+                    return self._json({"error": "bad id"}, 400)
+                with JOBS_LOCK:
+                    running = (JOBS.get(vid) or {}).get("state") == "running"
+                    if not running:
+                        JOBS[vid] = {"stages": {}, "state": "running", "error": ""}
+                if not running:
+                    threading.Thread(target=prepare_and_play, args=(vid, tgt), daemon=True).start()
+                return self._json(job_state(vid))
+            if u.path == "/api/prepare-status":
+                vid = (q.get("video") or [""])[0]
+                if not ytcap.parse_video_id(vid):
+                    return self._json({"error": "bad id"}, 400)
+                return self._json(job_state(vid))
             if u.path == "/api/export":
                 vid = (q.get("video") or [""])[0]
                 tgt = (q.get("tgt") or ["zh-Hans"])[0]
