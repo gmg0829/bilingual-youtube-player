@@ -113,6 +113,17 @@ def export_bilingual(video_id: str, tgt: str = "zh-Hans") -> Path:
     import export as exp
     media = ytcap.CACHE / "media" / f"{video_id}.mp4"
     if not (media.exists() and media.stat().st_size > 1000):
+        # the page may already be downloading this video; wait for it instead of
+        # starting a second yt-dlp that would fight over the same output file
+        for _ in range(120):
+            with STREAMS_LOCK:
+                st = STREAMS.get(video_id) or {}
+            if media.exists() and media.stat().st_size > 1000:
+                break
+            if st.get("state") not in ("pending",):
+                break
+            time.sleep(1)
+    if not (media.exists() and media.stat().st_size > 1000):
         path = ytcap.download_media(video_id)
         if not path:
             raise RuntimeError("视频还没下载下来（YouTube 可能在限流），稍后再试")
