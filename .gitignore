@@ -9,3 +9,5 @@ export/
 
 # design-skill working files (screenshots); direction.json is kept
 .taste-skill/inspect*/
+out/
+.last_video_id

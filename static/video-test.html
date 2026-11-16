@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><title>plain video test</title>
+<style>body{background:#000;color:#0f0;font:14px monospace;margin:0;padding:10px}
+video{width:640px;max-width:100%;background:#111}</style></head>
+<body>
+<div id="log">bare page, no app code</div>
+<video id="v" src="/api/local/y1-9yeYLJUo" playsinline muted preload="auto"></video>
+<script>
+const v=document.getElementById('v'), log=(m)=>{document.getElementById('log').textContent+="\n"+m;};
+v.addEventListener('loadedmetadata',()=>{log('metadata: '+v.duration.toFixed(0)+'s'); v.play().then(()=>log('play() resolved')).catch(e=>log('play err '+e.name));});
+setInterval(()=>log('t='+v.currentTime.toFixed(2)+' paused='+v.paused+' rs='+v.readyState),1500);
+document.addEventListener('click',()=>{v.muted=false;v.play().then(()=>log('click play ok')).catch(e=>log('click err '+e.name));});
+</script></body></html>

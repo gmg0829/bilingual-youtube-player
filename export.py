@@ -95,6 +95,28 @@ def _dur(s: int) -> str:
     return (f"{h}:{m:02d}" if h else str(m)) + f":{x:02d}"
 
 
+def _ts(t: float) -> str:
+    h = int(t // 3600); m = int((t % 3600) // 60); sec = t % 60
+    return f"{h:02d}:{m:02d}:{sec:06.3f}".replace(".", ",")
+
+
+def write_srt(video_id: str, tgt: str = "zh-Hans", src: str = "auto") -> Path:
+    """Bilingual .srt: the original line, then its translation under it."""
+    data = ytcap.load(video_id, src=src, tgt=tgt)
+    srt = ytcap.CACHE / "media" / f"{video_id}.{src}-{tgt}.srt"
+    lines = []
+    for i, s in enumerate(data["source"]["segments"]):
+        start = s["start"]; end = start + max(0.8, s.get("duration") or 1.2)
+        jaw = ytcap.bisect.bisect_left([t["start"] for t in data["target"]["segments"]], start) if hasattr(ytcap, "bisect") else -1
+        pair = ""
+        for t in data["target"]["segments"]:
+            if t["start"] <= start < t["start"] + max(1.0, t.get("duration") or 2.0):
+                pair = t["text"]; break
+        lines.append(f"{i+1}\n{_ts(start)} --> {_ts(end)}\n{s['text']}\n{pair}\n")
+    srt.write_text("\n".join(lines), "utf-8")
+    return srt
+
+
 def export(video_id: str, out_dir: Path, src: str = "auto", tgt: str = "zh-Hans") -> tuple:
     media = ytcap.CACHE / "media" / f"{video_id}.mp4"
     if not media.exists():
@@ -122,6 +144,8 @@ def export(video_id: str, out_dir: Path, src: str = "auto", tgt: str = "zh-Hans"
     )
     html_path = out_dir / f"{video_id}.html"
     html_path.write_text(html, "utf-8")
+    srt_path = out_dir / f"{video_id}.{tgt}.srt"
+    srt_path.write_text(write_srt(video_id, tgt=tgt, src=src).read_text("utf-8"), "utf-8")
     return html_path, mp4
 
 
