@@ -11,14 +11,15 @@ const $ = (s) => document.querySelector(s);
 const el = {
   form: $("#form"), url: $("#url"), load: $("#load"), hint: $("#hint"),
   srcLang: $("#srcLang"), tgtLang: $("#tgtLang"), prefer: $("#prefer"),
-  stageWrap: $("#stageWrap"), player: $("#player"), stage: $("#stage"),
+  stageWrap: $("#stageWrap"), stage: $("#stage"),
   vid: $("#vid"), cover: $("#cover"), bigplay: $("#bigplay"), tapnote: $("#tapnote"),
   subs: $("#subs"), subOrig: $("#subOrig"), subTrans: $("#subTrans"), bufnote: $("#bufnote"),
   safari: $("#safari"),
   pp: $("#pp"), ppIcon: $("#ppIcon"), seek: $("#seek"), tm: $("#tm"),
   rate: $("#rate"), mute: $("#mute"), vol: $("#vol"), ccmode: $("#ccmode"), fs: $("#fs"),
   vtitle: $("#vtitle"), vby: $("#vby"), notes: $("#notes"), streamNote: $("#streamNote"),
-  trPanel: $("#trPanel"), trlist: $("#trlist"), trInfo: $("#trInfo"), trToggle: $("#trToggle"),
+  intro: $("#intro"), meta: $("#meta"),
+  trlist: $("#trlist"), trInfo: $("#trInfo"), trToggle: $("#trToggle"),
   useYT: $("#useYT"),
 };
 
@@ -145,15 +146,15 @@ function showTapHint() {
   }
   if (state.direct) return;
   state.direct = true;
-  el.player.classList.add("direct");
+  el.stageWrap.classList.add("direct");
   el.cover.classList.remove("off");
-  el.tapnote.textContent = "浏览器拦截了自动播放 —— 点一下画面即可开始";
+  el.tapnote.textContent = "浏览器拦截了自动播放，点一下画面即可开始";
   el.tapnote.hidden = false;
 }
 
 function showSoundHint() {
   if (!state.muted) return;
-  el.tapnote.textContent = "静音自动播放中 —— 点右上角喇叭图标开声音";
+  el.tapnote.textContent = "静音自动播放中，点右上角喇叭图标开声音";
   el.tapnote.hidden = false;
   setTimeout(() => { if (!state.direct) el.tapnote.hidden = true; }, 4500);
 }
@@ -180,9 +181,15 @@ function drawSubs(t) {
   }
   const orig = mode === "trans" ? "" : currentLine(state.srcSegs, t);
   const trans = mode === "orig" ? "" : currentLine(state.tgtSegs, t);
+  const changed = el.subOrig.textContent !== orig || el.subTrans.textContent !== trans;
   el.subOrig.textContent = orig;
   el.subTrans.textContent = trans;
   el.subs.hidden = !(orig || trans);
+  if (changed && (orig || trans)) {
+    el.subs.classList.remove("pulse");
+    void el.subs.offsetWidth;          // restart the fade
+    el.subs.classList.add("pulse");
+  }
 }
 
 /* Transcript rows: each translated line is shown once, on the source row it starts in. */
@@ -228,7 +235,7 @@ setInterval(tick, 120);
 function renderTranscript() {
   const segs = state.srcSegs;
   if (!segs.length) {
-    el.trlist.innerHTML = '<div class="none">这个视频没有字幕文本。</div>';
+    el.trlist.innerHTML = '<p class="empty">这个视频没有字幕文本。</p>';
     el.trInfo.textContent = "—";
     return;
   }
@@ -243,16 +250,15 @@ function renderTranscript() {
       </div></div>`;
   }).join("");
   const bits = [`${segs.length} 句`];
-  if (state.srcLang) bits.push("原文 " + state.srcLang);
-  if (state.tgtLang && state.method) {
-    const how = {
-      "yt-mt": "YouTube 机翻", "yt-mt+t2s": "YouTube 机翻＋转简体",
-      native: "视频自带", "native+t2s": "视频自带＋转简体", "native+s2t": "视频自带＋转繁体",
-      llm: "AI 翻译", mt: "无密钥机翻", same: "同语",
-    }[state.method] || state.method;
-    bits.push("译文 " + state.tgtLang + "（" + how + "）");
-  }
-  el.trInfo.textContent = bits.join(" · ");
+  if (state.srcLang) bits.push(state.srcLang);
+  if (state.tgtLang && state.method) bits.push("→ " + state.tgtLang);
+  el.trInfo.textContent = bits.join(" ");
+  const how = {
+    "yt-mt": "YouTube 机翻", "yt-mt+t2s": "YouTube 机翻＋转简体",
+    native: "视频自带", "native+t2s": "视频自带＋转简体", "native+s2t": "视频自带＋转繁体",
+    llm: "AI 翻译", mt: "无密钥机翻", same: "同语",
+  }[state.method] || state.method;
+  el.trInfo.title = `原文 ${state.srcLang} · 译文 ${state.tgtLang}（${how}）`;
 }
 
 function escapeHtml(s) {
@@ -310,13 +316,16 @@ async function loadVideo(rawUrl) {
     el.notes.textContent = notes.join("\n");
 
     el.stageWrap.hidden = false;
+    el.intro.hidden = true;
+    el.meta.hidden = false;
     el.cover.style.backgroundImage = `url("${data.meta.thumbnail}")`;
+    if (data.meta.thumbnail) el.vid.poster = data.meta.thumbnail;
     el.cover.classList.remove("off");
     state.lastNow = -1;
     renderTranscript();
     if (state.kind === 'native') setTimeout(() => { try { el.vid.load(); } catch (e) {} kickLoop(); }, 120);
 
-    setHint(`已载入：${state.srcSegs.length} 句字幕` + (state.tgtSegs.length ? ` · ${state.tgtSegs.length} 句译文` : ""), "ok");
+    setHint("", "ok");
     await streamPromise;
   } catch (e) {
     setHint("出错了：" + String(e.message || e).split("\n")[0].slice(0, 160), "err");
@@ -340,7 +349,7 @@ async function resolveStream(videoId) {
       return true;
     }
     if (st.state === "error") {
-      el.streamNote.textContent = "视频流解析失败：" + (st.error || "") + " —— 可点右下角 YT 改用官方播放器。";
+      el.streamNote.textContent = "视频流解析失败：" + (st.error || "") + "。可点右下角 YT 改用官方播放器。";
       return false;
     }
     const pct = Math.round(st.progress || 0);
@@ -370,6 +379,7 @@ function mountNative(videoId, url) {
   state.kind = "native";
   state.yt = null; state.ytReady = false;
   el.stageWrap.hidden = false;   // a hidden container silently swallows the media load
+  if (el.intro) el.intro.hidden = true;
   el.vid.hidden = false;
   el.vid.src = url;
   el.vid.muted = false;
@@ -378,17 +388,17 @@ function mountNative(videoId, url) {
   kickLoop();
   el.vid.addEventListener("play", () => {
     el.cover.classList.add("off");
-    el.player.classList.remove("paused");
+    el.stageWrap.classList.remove("paused");
     el.ppIcon.innerHTML = ICON.pause;
     el.tapnote.hidden = true;
     if (el.safari) el.safari.hidden = true;
     state.direct = false;
-    el.player.classList.remove("direct");
+    el.stageWrap.classList.remove("direct");
   });
   el.vid.addEventListener("waiting", () => { el.bufnote.hidden = false; });
   el.vid.addEventListener("playing", () => { el.bufnote.hidden = true; });
   el.vid.addEventListener("pause", () => {
-    el.player.classList.add("paused");
+    el.stageWrap.classList.add("paused");
     el.ppIcon.innerHTML = ICON.play;
   });
   el.vid.addEventListener("volumechange", () => {
@@ -397,7 +407,7 @@ function mountNative(videoId, url) {
   });
   const onMeta = () => {
     player.ready = true;
-    el.player.classList.remove("paused");
+    el.stageWrap.classList.remove("paused");
     el.ppIcon.innerHTML = ICON.pause;
     state.userPaused = false;
     state.startedAt = Date.now();
@@ -464,11 +474,11 @@ async function mountYT(videoId) {
       },
       onStateChange: (e) => {
         const playing = e.data === 1;
-        el.player.classList.toggle("paused", !playing);
+        el.stageWrap.classList.toggle("paused", !playing);
         el.ppIcon.innerHTML = playing ? ICON.pause : ICON.play;
         if (playing) {
           state.direct = false;
-          el.player.classList.remove("direct");
+          el.stageWrap.classList.remove("direct");
           el.tapnote.hidden = true;
           el.cover.classList.add("off");
         } else if (e.data === 2 && !state.userPaused && state.startedAt && Date.now() - state.startedAt < 15000) {
@@ -512,7 +522,7 @@ el.bigplay.addEventListener("click", (e) => {
   e.stopPropagation();
   el.cover.classList.add("off");
   state.direct = false;
-  el.player.classList.remove("direct");
+  el.stageWrap.classList.remove("direct");
   el.tapnote.hidden = true;
   if (state.muted) player.mute(false);
   state.userPaused = false;
@@ -523,7 +533,7 @@ el.stage.addEventListener("click", (e) => {
   if (e.target.closest("#bigplay")) return;
   if (state.direct) {
     state.direct = false;
-    el.player.classList.remove("direct");
+    el.stageWrap.classList.remove("direct");
     el.tapnote.hidden = true;
   }
   if (state.kind === "native") togglePlay();

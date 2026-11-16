@@ -808,7 +808,8 @@ def load(video_id: str, src: str = "auto", tgt: str = "zh-Hans", prefer: str = "
             elif prefer == "mt":
                 order = ["gtx", "ytmt"]
             else:
-                order = (["llm"] if os.environ.get("YTB_LLM_KEY") else []) + ["ytmt", "gtx"]
+                # gtx first: it answers in seconds, YouTube's own MT is slow and often 429s
+                order = (["llm"] if os.environ.get("YTB_LLM_KEY") else []) + ["gtx", "ytmt"]
 
             for prov in order:
                 if target_segs:
