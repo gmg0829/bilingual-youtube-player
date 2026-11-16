@@ -3,3 +3,9 @@ cache/
 __pycache__/
 *.pyc
 .DS_Store
+
+# exported offline players (contain a copy of the mp4)
+export/
+
+# design-skill working files (screenshots); direction.json is kept
+.taste-skill/inspect*/
