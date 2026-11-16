@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import traceback
+import subprocess
 import urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -105,6 +106,30 @@ def serve_local(video_id: str, range_header: str | None):
         f.seek(start)
         data = f.read(length)
     return start, end, size, data
+
+
+def export_bilingual(video_id: str, tgt: str = "zh-Hans") -> Path:
+    """Mux the bilingual subtitle track into the mp4 (no re-encode) and return the file."""
+    import export as exp
+    media = ytcap.CACHE / "media" / f"{video_id}.mp4"
+    if not (media.exists() and media.stat().st_size > 1000):
+        path = ytcap.download_media(video_id)
+        if not path:
+            raise RuntimeError("视频还没下载下来（YouTube 可能在限流），稍后再试")
+        media = Path(path)
+    srt = exp.write_srt(video_id, tgt=tgt)
+    outdir = ROOT / "out"
+    outdir.mkdir(exist_ok=True)
+    out = outdir / f"{video_id}-双语.mp4"
+    if not out.exists() or out.stat().st_mtime < max(media.stat().st_mtime, srt.stat().st_mtime):
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(media), "-i", str(srt),
+               "-map", "0:v", "-map", "0:a?", "-map", "1:0", "-c", "copy", "-c:s", "mov_text",
+               "-metadata:s:s:0", "language=zho", "-metadata:s:s:0", "title=EN+ZH",
+               "-disposition:s:0", "default", str(out)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        if r.returncode != 0 or not out.exists():
+            raise RuntimeError("内嵌字幕失败：" + (r.stderr or "").strip()[-160:])
+    return out
 
 
 def proxy_stream(video_id: str, range_header: str | None):
@@ -212,6 +237,21 @@ class Handler(BaseHTTPRequestHandler):
                 if st.get("error"):
                     out["error"] = st["error"]
                 return self._json(out)
+            if u.path == "/api/export":
+                vid = (q.get("video") or [""])[0]
+                tgt = (q.get("tgt") or ["zh-Hans"])[0]
+                if not ytcap.parse_video_id(vid):
+                    return self._json({"error": "bad id"}, 400)
+                path = export_bilingual(vid, tgt)
+                played = False
+                try:
+                    r = subprocess.run(["apple-player", "play", str(path)],
+                                       capture_output=True, text=True, timeout=45)
+                    played = '"status" : "playing"' in (r.stdout or "") or "playing" in (r.stdout or "")
+                except Exception:
+                    played = False
+                return self._json({"ok": True, "file": str(path), "name": path.name,
+                                   "size": path.stat().st_size, "played": played})
             if u.path.startswith("/api/local/"):
                 return self._local(u.path[len("/api/local/"):])
             if u.path.startswith("/api/stream/"):

@@ -19,6 +19,7 @@ const el = {
   rate: $("#rate"), mute: $("#mute"), vol: $("#vol"), ccmode: $("#ccmode"), fs: $("#fs"),
   vtitle: $("#vtitle"), vby: $("#vby"), notes: $("#notes"), streamNote: $("#streamNote"),
   intro: $("#intro"), meta: $("#meta"),
+  exportBtn: $("#exportBtn"), exportNote: $("#exportNote"),
   trlist: $("#trlist"), trInfo: $("#trInfo"), trToggle: $("#trToggle"),
   useYT: $("#useYT"),
 };
@@ -574,6 +575,35 @@ el.trlist.addEventListener("click", (e) => {
     if (s) player.seek(s.start);
   }
 });
+el.exportBtn.addEventListener("click", async () => {
+  const vid = videoIdOf(el.url.value);
+  if (!vid) { el.exportNote.textContent = "先载入一个视频"; return; }
+  el.exportBtn.disabled = true;
+  el.exportNote.className = "action-note";
+  const tgt = el.tgtLang.value || "zh-Hans";
+  const tick = ["正在准备视频", "正在写入字幕轨", "正在打开播放器"];
+  let i = 0;
+  const timer = setInterval(() => {
+    el.exportNote.textContent = tick[Math.min(i++, tick.length - 1)] + "…";
+  }, 1500);
+  try {
+    const r = await fetch(`/api/export?video=${encodeURIComponent(vid)}&tgt=${encodeURIComponent(tgt)}`);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    clearInterval(timer);
+    el.exportNote.className = "action-note ok";
+    el.exportNote.textContent = d.played
+      ? "已在系统播放器打开，字幕在播放器里可开关"
+      : "已生成，可在播放器里打开：" + d.name;
+  } catch (e) {
+    clearInterval(timer);
+    el.exportNote.className = "action-note err";
+    el.exportNote.textContent = "失败：" + String(e.message || e).slice(0, 80);
+  } finally {
+    el.exportBtn.disabled = false;
+  }
+});
+
 el.useYT.addEventListener("click", () => {
   const vid = videoIdOf(el.url.value);
   if (vid) mountYT(vid);
